@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aquabeads Pattern Generator</title>
+
+<style>
+body{
+    margin:0;
+    font-family:Arial,sans-serif;
+    background:#f0f2f5;
+}
+
+header{
+    background:#0078d7;
+    color:white;
+    padding:15px;
+    text-align:center;
+}
+
+.controls{
+    display:flex;
+    flex-wrap:wrap;
+    gap:15px;
+    padding:15px;
+    background:white;
+    box-shadow:0 2px 5px rgba(0,0,0,.15);
+}
+
+label{
+    font-size:14px;
+    display:block;
+    margin-bottom:4px;
+}
+
+input,button{
+    padding:6px;
+}
+
+.main{
+    display:flex;
+    flex-wrap:wrap;
+}
+
+.canvasContainer{
+    flex:3;
+    padding:15px;
+}
+
+.sidebar{
+    flex:1;
+    min-width:250px;
+    background:white;
+    padding:15px;
+}
+
+canvas{
+    background:white;
+    border:1px solid #ccc;
+    max-width:100%;
+}
+
+.colorRow{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-bottom:6px;
+}
+
+.swatch{
+    width:20px;
+    height:20px;
+    border-radius:50%;
+    border:1px solid black;
+}
+</style>
+</head>
+<body>
+
+<header>
+<h1>Aquabeads Pattern Generator</h1>
+</header>
+
+<div class="controls">
+
+<div>
+<label>Image</label>
+<input type="file" id="imageInput" accept="image/*">
+</div>
+
+<div>
+<label>Board Width</label>
+<input type="number" id="cols" value="50">
+</div>
+
+<div>
+<label>Board Height</label>
+<input type="number" id="rows" value="50">
+</div>
+
+<div>
+<label>Bead Size</label>
+<input type="range" id="beadSize" min="8" max="30" value="16">
+</div>
+
+<div>
+<label>Indexed Colors</label>
+<input type="number" id="colorDepth" value="64" min="8" max="256">
+</div>
+
+<div>
+<label>Dither</label>
+<input type="checkbox" id="dither" checked>
+</div>
+
+<div>
+<label>&nbsp;</label>
+<button id="downloadBtn">
+Download PNG
+</button>
+</div>
+
+</div>
+
+<div class="main">
+
+<div class="canvasContainer">
+<canvas id="canvas"></canvas>
+</div>
+
+<div class="sidebar">
+<h3>Bead Counts</h3>
+<div id="counts"></div>
+</div>
+
+</div>
+
+<script>
+
+const palette = [
+"#ffffff","#000000",
+"#ffd1dc","#ffb6c1",
+"#ff6961","#ff8c42",
+"#ffd700","#fff59d",
+"#90ee90","#00b050",
+"#7fffd4","#40e0d0",
+"#87ceeb","#1e90ff",
+"#4169e1","#9370db",
+"#dda0dd","#ff69b4",
+"#c0c0c0","#808080",
+"#8b4513","#deb887",
+"#f08080","#98fb98",
+"#4682b4","#6a5acd",
+"#ff1493","#ff6347",
+"#cd853f","#6495ed",
+"#2e8b57","#ffe4b5"
+];
+
+const canvas =
+document.getElementById("canvas");
+
+const ctx =
+canvas.getContext("2d");
+
+let sourceImage = null;
+
+function hexToRGB(hex){
+
+const num =
+parseInt(hex.slice(1),16);
+
+return [
+(num>>16)&255,
+(num>>8)&255,
+num&255
+];
+}
+
+function nearestPaletteColor(rgb){
+
+let best = palette[0];
+let bestDist = Infinity;
+
+for(const color of palette){
+
+const p = hexToRGB(color);
+
+const dist =
+Math.pow(rgb[0]-p[0],2)+
+Math.pow(rgb[1]-p[1],2)+
+Math.pow(rgb[2]-p[2],2);
+
+if(dist < bestDist){
+bestDist = dist;
+best = color;
+}
+}
+
+return best;
+}
+
+function quantize8Bit(imgData, levels){
+
+const data = imgData.data;
+
+const q =
+Math.max(2,
+Math.round(Math.cbrt(levels)));
+
+for(let i=0;i<data.length;i+=4){
+
+data[i] =
+Math.round(
+data[i] / (255/(q-1))
+)*(255/(q-1));
+
+data[i+1] =
+Math.round(
+data[i+1] / (255/(q-1))
+)*(255/(q-1));
+
+data[i+2] =
+Math.round(
+data[i+2] / (255/(q-1))
+)*(255/(q-1));
+}
+
+return imgData;
+}
+
+function floydSteinberg(imageData){
+
+const data = imageData.data;
+const width = imageData.width;
+const height = imageData.height;
+
+for(let y=0;y<height;y++){
+
+for(let x=0;x<width;x++){
+
+const idx =
+(y*width+x)*4;
+
+for(let c=0;c<3;c++){
+
+const oldVal =
+data[idx+c];
+
+const newVal =
+Math.round(oldVal/32)*32;
+
+const error =
+oldVal-newVal;
+
+data[idx+c]=newVal;
+
+spread(x+1,y,error*7/16,c);
+spread(x-1,y+1,error*3/16,c);
+spread(x,y+1,error*5/16,c);
+spread(x+1,y+1,error*1/16,c);
+
+}
+}
+}
+
+function spread(x,y,val,c){
+
+if(x<0||y<0||
+x>=width||
+y>=height) return;
+
+const index =
+(y*width+x)*4+c;
+
+data[index]+=val;
+}
+}
+
+function generate(){
+
+if(!sourceImage) return;
+
+const cols =
+parseInt(document.getElementById("cols").value);
+
+const rows =
+parseInt(document.getElementById("rows").value);
+
+const beadSize =
+parseInt(document.getElementById("beadSize").value);
+
+const depth =
+parseInt(document.getElementById("colorDepth").value);
+
+const dither =
+document.getElementById("dither").checked;
+
+const off =
+document.createElement("canvas");
+
+off.width = cols;
+off.height = rows;
+
+const octx =
+off.getContext("2d");
+
+octx.drawImage(
+sourceImage,
+0,
+0,
+cols,
+rows
+);
+
+let imgData =
+octx.getImageData(
+0,
+0,
+cols,
+rows
+);
+
+imgData =
+quantize8Bit(
+imgData,
+depth
+);
+
+if(dither){
+
+floydSteinberg(
+imgData
+);
+}
+
+octx.putImageData(
+imgData,
+0,
+0
+);
+
+const pixels =
+imgData.data;
+
+canvas.width =
+cols * beadSize * 1.8;
+
+canvas.height =
+rows * beadSize * 1.6;
+
+ctx.clearRect(
+0,
+0,
+canvas.width,
+canvas.height
+);
+
+const counts = {};
+
+for(let y=0;y<rows;y++){
+
+for(let x=0;x<cols;x++){
+
+const i =
+(y*cols+x)*4;
+
+const rgb = [
+pixels[i],
+pixels[i+1],
+pixels[i+2]
+];
+
+const color =
+nearestPaletteColor(rgb);
+
+counts[color] =
+(counts[color]||0)+1;
+
+const drawX =
+x*beadSize*1.7+
+(y%2)*(beadSize*.85)+
+beadSize;
+
+const drawY =
+y*beadSize*1.45+
+beadSize;
+
+ctx.beginPath();
+
+ctx.arc(
+drawX,
+drawY,
+beadSize*.5,
+0,
+Math.PI*2
+);
+
+ctx.fillStyle=color;
+ctx.fill();
+
+ctx.strokeStyle=
+"rgba(0,0,0,.3)";
+ctx.stroke();
+}
+}
+
+displayCounts(counts);
+}
+
+function displayCounts(counts){
+
+const div =
+document.getElementById("counts");
+
+div.innerHTML="";
+
+Object.entries(counts)
+.sort((a,b)=>b[1]-a[1])
+.forEach(([color,count])=>{
+
+const row =
+document.createElement("div");
+
+row.className="colorRow";
+
+row.innerHTML=`
+<div class="swatch"
+style="background:${color}">
+</div>
+<div>
+${count} beads
+</div>
+`;
+
+div.appendChild(row);
+});
+}
+
+document
+.getElementById("imageInput")
+.addEventListener("change",e=>{
+
+const file =
+e.target.files[0];
+
+if(!file) return;
+
+const img =
+new Image();
+
+img.onload=()=>{
+sourceImage=img;
+generate();
+};
+
+img.src =
+URL.createObjectURL(file);
+});
+
+[
+"cols",
+"rows",
+"beadSize",
+"colorDepth",
+"dither"
+].forEach(id=>{
+
+document
+.getElementById(id)
+.addEventListener(
+"input",
+generate
+);
+});
+
+document
+.getElementById("downloadBtn")
+.addEventListener(
+"click",
+()=>{
+
+const a=
+document.createElement("a");
+
+a.download=
+"aquabeads-pattern.png";
+
+a.href=
+canvas.toDataURL();
+
+a.click();
+});
+</script>
+
+</body>
+</html>
